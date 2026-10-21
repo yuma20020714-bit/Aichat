@@ -22,7 +22,6 @@ def set_bg_image(image_bytes):
         background-position: center;
         background-attachment: fixed;
     }}
-    /* LINE風メッセージコンテナ */
     .chat-row-user {{
         display: flex;
         justify-content: flex-end;
@@ -49,7 +48,6 @@ def set_bg_image(image_bytes):
         max-width: 70%;
         word-break: break-all;
     }}
-    /* ナレーション（*〜*）のスタイル */
     .narration {{
         color: #d1d5db !important;
         font-style: italic;
@@ -63,10 +61,8 @@ def set_bg_image(image_bytes):
     """
     st.markdown(css, unsafe_allow_html=True)
 
-# APIキーの自動取得（Secretsまたはサイドバー）
 api_key_from_secret = st.secrets.get("GOOGLE_API_KEY", "")
 
-# セッション状態の初期化
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "bg_image_bytes" not in st.session_state:
@@ -150,7 +146,6 @@ with st.sidebar:
         st.session_state.bg_image_bytes = None
         st.rerun()
 
-# タイトルは会話が始まっていない時だけ表示
 if len(st.session_state.messages) == 0:
     st.title(f"🎭 {char_name} とのロールプレイ")
 
@@ -202,7 +197,8 @@ def generate_smartphone_image(context_prompt):
                 contents=[{"role": "user", "parts": [{"text": prompt_request}]}]
             )
             image_prompt = p_res.text.strip()
-            encoded_prompt = urllib.parse.quote(image_prompt + ", high quality anime background, masterpiece")
+            # 安全にエンコード
+            encoded_prompt = urllib.parse.quote((image_prompt + ", high quality anime background, masterpiece").encode('utf-8'))
             img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=540&height=960&nologo=true&seed=42"
 
             res = requests.get(img_url)
@@ -216,7 +212,7 @@ def generate_smartphone_image(context_prompt):
             st.error(f"画像生成エラー: {e}")
 
 # ==========================================
-# 💬 LINE風チャット表示（カスタムHTML）
+# 💬 LINE風チャット表示
 # ==========================================
 for msg in st.session_state.messages:
     if msg["role"] == "user":
@@ -235,7 +231,6 @@ if user_input := st.chat_input("メッセージを入力... (行動は *歯磨�
     if not google_api_key:
         st.error("APIキーが設定されていません！")
     else:
-        # ユーザー（自分）のメッセージを即座に右側に表示
         st.markdown(f'<div class="chat-row-user"><div class="chat-bubble-user">{format_narration_text(user_input)}</div></div>', unsafe_allow_html=True)
         st.session_state.messages.append({"role": "user", "content": user_input})
 
@@ -260,14 +255,13 @@ if user_input := st.chat_input("メッセージを入力... (行動は *歯磨�
             role = "user" if m["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": str(m["content"])}]})
 
-        # 相手（AI）のメッセージを左側にストリーミング出力
         with st.container():
             placeholder = st.empty()
             try:
                 response = client.models.generate_content_stream(
                     model='gemini-3.8-flash',
                     contents=contents,
-                    config={'system_instruction': service_instruction if 'service_instruction' in locals() else system_instruction}
+                    config={'system_instruction': system_instruction}
                 )
                 
                 full_reply = ""
