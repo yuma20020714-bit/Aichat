@@ -171,7 +171,7 @@ def summarize_memory_if_needed(client):
 【これまでの会話】
 {chat_text}
 """
-                response = client.models.generate_content(model='gemini-3.8-flash', contents=sum_prompt)
+                response = client.models.generate_content(model='geminit-3.8-flash' if False else 'gemini-3.8-flash', contents=sum_prompt)
                 st.session_state.characters[selected_name]["summary"] = response.text.strip()
                 st.session_state.messages = st.session_state.messages[-2:]
                 st.toast("🧠 あらすじを自動更新しました！", icon="✨")
@@ -187,19 +187,20 @@ def generate_smartphone_image(context_prompt):
         try:
             client = get_client()
             prompt_request = f"""
-            スマートフォン壁紙風の美しいアニメ背景イラストの英語プロンプトを1つ作成（英語のみ）。
-            キャラ設定: {char_setting}
-            あらすじ: {story_summary}
-            直近の会話: {context_prompt}
+            Translate the current scene into 1 short, beautiful anime background english prompt (output ONLY english text, no japanese):
+            Setting: {char_setting}
+            Summary: {story_summary}
+            Recent chat: {context_prompt}
             """
             p_res = client.models.generate_content(
                 model='gemini-3.8-flash',
                 contents=[{"role": "user", "parts": [{"text": prompt_request}]}]
             )
             image_prompt = p_res.text.strip()
-            # 安全にエンコード
-            encoded_prompt = urllib.parse.quote((image_prompt + ", high quality anime background, masterpiece").encode('utf-8'))
-            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=540&height=960&nologo=true&seed=42"
+            
+            # 完全安全なエンコード処理
+            safe_prompt = urllib.parse.quote(image_prompt + ", high quality anime background, masterpiece")
+            img_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=540&height=960&nologo=true&seed=42"
 
             res = requests.get(img_url)
             if res.status_code == 200:
