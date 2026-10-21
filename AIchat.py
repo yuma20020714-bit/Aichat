@@ -7,8 +7,9 @@ import json
 # ==========================================
 # ⚙️ 設定値
 # ==========================================
-MODEL = "gemini-2.5-flash"
-IMAGE_MODEL = "imagen-3.0-generate-002"  # ※無料キーだと使えないことが多い（有料枠向け）
+# モデル名の初期値（サイドバーで書き換えられるので、古くなってもコード修正は不要）
+DEFAULT_MODEL = "gemini-3.8-flash"
+DEFAULT_IMAGE_MODEL = "imagen-3.0-generate-002"  # ※無料キーだと使えないことが多い（有料枠向け）
 KEEP_RECENT = 20      # 要約せずそのまま送る直近のメッセージ数（20 = 約10往復）
 SUMMARIZE_CHUNK = 10  # 一度に要約へ回すメッセージ数
 
@@ -91,7 +92,15 @@ st.title("🎭 自作AIロールプレイ")
 
 with st.sidebar:
     st.header("⚙️ システム設定")
-    google_api_key = st.text_input("Google API Keyを入力", type="password")
+    google_api_key = (st.text_input("Google API Keyを入力", type="password") or "").strip()
+    # APIキーに日本語・全角文字が混ざっていると 'ascii' codec エラーになるので事前にチェック
+    if google_api_key and not google_api_key.isascii():
+        st.error("APIキーに日本語や全角文字が混ざっています。キーだけを貼り直してください。（半角英数字と - _ のみ）")
+        google_api_key = ""
+
+    MODEL = st.text_input("💬 チャット用モデル名", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    IMAGE_MODEL = st.text_input("🎨 画像生成モデル名", DEFAULT_IMAGE_MODEL).strip() or DEFAULT_IMAGE_MODEL
+    st.caption("「モデルが使えない」系のエラーが出たら、ここを新しい名前に変えればOK。")
 
     st.markdown("---")
     st.subheader("👤 キャラクター設定")
