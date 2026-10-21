@@ -8,7 +8,7 @@ import urllib.parse
 import requests
 
 # ==========================================
-# ⚙️ 画面・CSS（背景＆ナレーション用スタイル）
+# ⚙️ 画面・CSS（LINE風チャット＆デザイン調整）
 # ==========================================
 st.set_page_config(page_title="完全無料AIシミュレーター", page_icon="🎭", layout="wide")
 
@@ -22,12 +22,38 @@ def set_bg_image(image_bytes):
         background-position: center;
         background-attachment: fixed;
     }}
+    /* チャット全体の背景を透明化し、LINE風の配置にする */
     div[data-testid="stChatMessage"] {{
-        background-color: rgba(0, 0, 0, 0.5) !important;
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
+        background-color: transparent !important;
+        padding: 5px 10px;
+        margin-bottom: 5px;
     }}
+    /* ユーザー（自分）のメッセージを右側に寄せる */
+    div.st-key-user_msg {{
+        flex-direction: row-reverse !important;
+        text-align: right;
+    }}
+    div.st-key-user_msg div[data-testid="stChatMessageContent"] {{
+        background-color: rgba(0, 120, 255, 0.65) !important;
+        color: white;
+        border-radius: 15px 15px 0 15px;
+        padding: 10px 14px;
+        display: inline-block;
+        text-align: left;
+    }}
+    /* 相手（AI）のメッセージを左側に配置 */
+    div.st-key-ai_msg div[data-testid="stChatMessageContent"] {{
+        background-color: rgba(30, 30, 30, 0.75) !important;
+        color: white;
+        border-radius: 15px 15px 15px 0;
+        padding: 10px 14px;
+        display: inline-block;
+    }}
+    /* アイコンを非表示にする */
+    div[data-testid="stChatMessageAvatar"] {{
+        display: none !important;
+    }}
+    /* ナレーション（*〜*）のスタイル */
     .narration {{
         color: #d1d5db !important;
         font-style: italic;
@@ -40,6 +66,9 @@ def set_bg_image(image_bytes):
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
+
+# APIキーの自動取得（Secretsまたはサイドバー）
+api_key_from_secret = st.secrets.get("GOOGLE_API_KEY", "")
 
 # セッション状態の初期化
 if "messages" not in st.session_state:
@@ -66,15 +95,18 @@ if "characters" not in st.session_state:
 if st.session_state.bg_image_bytes:
     set_bg_image(st.session_state.bg_image_bytes)
 
-st.title("🎭 自作AIロールプレイ (完全版)")
-
 # --- サイドバー（設定エリア） ---
 with st.sidebar:
-    st.header("⚙️ システム設定")
-    google_api_key = st.text_input("Google API Keyを入力", type="password")
+    st.header("⚙️ 設定")
+    # Secretが未設定の場合のみ入力欄を表示
+    if not api_key_from_secret:
+        google_api_key = st.text_input("Google API Keyを入力", type="password")
+    else:
+        google_api_key = api_key_from_secret
+        st.success("API Key読込済み（自動）")
     
     st.markdown("---")
-    st.subheader("👥 キャラクター選択・保存")
+    st.subheader("👥 キャラクター")
     
     char_list = list(st.session_state.characters.keys())
     selected_name = st.selectbox("登録キャラから選ぶ", char_list)
@@ -87,7 +119,7 @@ with st.sidebar:
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💾 設定を保存"):
+        if st.button("💾 設定保存"):
             st.session_state.characters[selected_name] = {
                 "name": char_name,
                 "setting": char_setting,
@@ -107,35 +139,35 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.subheader("📊 リアルタイム記憶メーター")
+    st.subheader("📊 記憶メーター")
     total_chars = sum(len(str(m.get("content", ""))) for m in st.session_state.messages) + len(char_setting) + len(story_summary)
     token_est = int(total_chars * 1.5)
     st.progress(min(token_est / 8000, 1.0))
-    st.caption(f"現在の記憶容量: 約 {token_est} / 8000 トークン")
+    st.caption(f"容量: 約 {token_est} / 8000 トークン")
 
     st.markdown("---")
-    st.subheader("🎨 スマホサイズ画像生成")
-    gen_img_btn = st.button("🎨 今の状況を画像化 (背景更新)")
+    st.subheader("🎨 背景画像")
+    gen_img_btn = st.button("🎨 今の状況を画像化")
 
     st.markdown("---")
-    if st.button("🗑️ 会話を最初からやり直す"):
+    if st.button("🗑️ 最初からやり直す"):
         st.session_state.messages = []
         st.session_state.bg_image_bytes = None
         st.rerun()
+
+# タイトルは「会話がまだ始まっていない時」だけ表示し、会話が始まればスッキリ消えるようにする
+if len(st.session_state.messages) == 0:
+    st.title(f"🎭 {char_name} とのロールプレイ")
 
 def get_client():
     return genai.Client(api_key=google_api_key)
 
 def format_narration_text(text):
-    formatted = re.sub(r'\*(.*?)\*', r'<span class="narration">*\1*</span>', text)
-    return formatted
+    return re.sub(r'\*(.*?)\*', r'<span class="narration">*\1*</span>', text)
 
-# ==========================================
-# 🧠 記憶圧縮（自動要約）機能
-# ==========================================
 def summarize_memory_if_needed(client):
     if len(st.session_state.messages) >= 10:
-        with st.spinner("🧠 昔の会話を要約して記憶を整理中..."):
+        with st.spinner("🧠 記憶を整理中..."):
             try:
                 chat_text = ""
                 for m in st.session_state.messages:
@@ -143,36 +175,29 @@ def summarize_memory_if_needed(client):
                         chat_text += f"{m['role']}: {m['content']}\n"
                 
                 sum_prompt = f"""
-以下のロールプレイのこれまでの会話履歴と現在のあらすじから、今後のロールプレイで絶対に忘れてはならない重要な出来事・感情の変化・約束事を含めた「最新のあらすじ（200文字程度）」を作成してください。
+以下の会話とあらすじから、今後のロールプレイで重要な「最新のあらすじ（200文字程度）」を作成してください。
 【現在のあらすじ】
 {story_summary}
 【これまでの会話】
 {chat_text}
 """
-                response = client.models.generate_content(
-                    model='gemini-3.8-flash',
-                    contents=sum_prompt
-                )
-                new_summary = response.text.strip()
-                st.session_state.characters[selected_name]["summary"] = new_summary
+                response = client.models.generate_content(model='gemini-3.8-flash', contents=sum_prompt)
+                st.session_state.characters[selected_name]["summary"] = response.text.strip()
                 st.session_state.messages = st.session_state.messages[-2:]
-                st.toast("🧠 記憶を要約してあらすじを更新しました！", icon="✨")
+                st.toast("🧠 あらすじを自動更新しました！", icon="✨")
             except Exception as e:
                 print(f"要約エラー: {e}")
 
-# ==========================================
-# 🖼️ 高速・エラーなし背景画像生成（無料API）
-# ==========================================
 def generate_smartphone_image(context_prompt):
     if not google_api_key:
-        st.error("左のサイドバーにGoogle API Keyを入力してください！")
+        st.error("APIキーが設定されていません！")
         return
 
-    with st.spinner("🎨 スマホサイズの背景画像を生成中..."):
+    with st.spinner("🎨 背景画像を生成中..."):
         try:
             client = get_client()
             prompt_request = f"""
-            以下の設定と文脈から、スマートフォン壁紙風の美しいアニメ背景イラストの英語プロンプトを1つだけ作成してください（余計な文字は出力せずプロンプトの英語のみ）。
+            スマートフォン壁紙風の美しいアニメ背景イラストの英語プロンプトを1つ作成（英語のみ）。
             キャラ設定: {char_setting}
             あらすじ: {story_summary}
             直近の会話: {context_prompt}
@@ -182,12 +207,9 @@ def generate_smartphone_image(context_prompt):
                 contents=[{"role": "user", "parts": [{"text": prompt_request}]}]
             )
             image_prompt = p_res.text.strip()
-
-            # 無料の高速画像生成URLを作成
             encoded_prompt = urllib.parse.quote(image_prompt + ", high quality anime background, masterpiece")
             img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=540&height=960&nologo=true&seed=42"
 
-            # 画像データをダウンロード
             res = requests.get(img_url)
             if res.status_code == 200:
                 img_bytes = res.content
@@ -195,17 +217,16 @@ def generate_smartphone_image(context_prompt):
                 st.session_state.messages.append({"role": "assistant", "content": image_pil, "type": "image"})
                 st.session_state.bg_image_bytes = img_bytes
                 st.rerun()
-            else:
-                st.error("画像の取得に失敗しました。")
-
         except Exception as e:
             st.error(f"画像生成エラー: {e}")
 
 # ==========================================
-# 💬 チャット表示・処理
+# 💬 LINE風チャット表示
 # ==========================================
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
+    # 自分のメッセージは右側（user_msg）、相手は左側（ai_msg）に分ける
+    msg_key = "user_msg" if msg["role"] == "user" else "ai_msg"
+    with st.chat_message(msg["role"], key=msg_key):
         if msg.get("type") == "image":
             st.image(msg["content"], caption="📱 生成画像", use_container_width=True)
         else:
@@ -217,9 +238,11 @@ if gen_img_btn:
 
 if user_input := st.chat_input("メッセージを入力... (行動は *歯磨きする* , 画像変更は (画像生成))"):
     if not google_api_key:
-        st.error("左のサイドバーにGoogle API Keyを入力してください！")
+        st.error("APIキーが設定されていません！")
     else:
-        st.chat_message("user").markdown(format_narration_text(user_input), unsafe_allow_html=True)
+        # ユーザー（自分）のメッセージを右側に表示
+        with st.chat_message("user", key="user_msg"):
+            st.markdown(format_narration_text(user_input), unsafe_allow_html=True)
         st.session_state.messages.append({"role": "user", "content": user_input})
 
         client = get_client()
@@ -243,9 +266,9 @@ if user_input := st.chat_input("メッセージを入力... (行動は *歯磨�
             role = "user" if m["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": str(m["content"])}]})
 
-        with st.chat_message("assistant"):
+        # 相手（AI）のメッセージを左側にストリーミング出力
+        with st.chat_message("assistant", key="ai_msg"):
             try:
-                # ストリーミング（Geminiのように波のように文字が流れてくる演出）
                 response = client.models.generate_content_stream(
                     model='gemini-3.8-flash',
                     contents=contents,
@@ -257,9 +280,7 @@ if user_input := st.chat_input("メッセージを入力... (行動は *歯磨�
                         if chunk.text:
                             yield chunk.text
 
-                # 波のように文字をリアルタイム出力しつつ、ナレーション部分を装飾
                 reply = st.write_stream(stream_data())
-                
                 st.session_state.messages.append({"role": "assistant", "content": reply})
 
                 if "(画像生成)" in user_input:
