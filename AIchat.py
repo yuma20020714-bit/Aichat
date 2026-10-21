@@ -1,10 +1,11 @@
 import streamlit as st
 from google import genai
-from google.genai import types
 import PIL.Image
 import io
 import base64
 import re
+import urllib.parse
+import requests
 
 # ==========================================
 # ⚙️ 画面・CSS（背景＆ナレーション用スタイル）
@@ -27,7 +28,6 @@ def set_bg_image(image_bytes):
         padding: 10px;
         margin-bottom: 10px;
     }}
-    /* *〜* で囲まれた行動・心情・ナレーションを薄い色＆少し斜体でスタイリッシュに表現 */
     .narration {{
         color: #d1d5db !important;
         font-style: italic;
@@ -66,7 +66,7 @@ if "characters" not in st.session_state:
 if st.session_state.bg_image_bytes:
     set_bg_image(st.session_state.bg_image_bytes)
 
-st.title("🎭 自作AIロールプレイ (ナレーション対応モデル)")
+st.title("🎭 自作AIロールプレイ (完全版)")
 
 # --- サイドバー（設定エリア） ---
 with st.sidebar:
@@ -82,7 +82,7 @@ with st.sidebar:
     current_char = st.session_state.characters.get(selected_name, {})
     
     char_name = st.text_input("キャラの名前", current_char.get("name", ""))
-    char_setting = st.text_area("詳細設定・ルール", current_char.get("setting", ""), height=130)
+    char_setting = st.text_area("詳細設定・ルール", current_char.get("setting", ""), height=120)
     story_summary = st.text_area("📌 記憶（あらすじ・自動更新）", current_char.get("summary", ""), height=100)
 
     col1, col2 = st.columns(2)
@@ -126,11 +126,7 @@ with st.sidebar:
 def get_client():
     return genai.Client(api_key=google_api_key)
 
-# ==========================================
-# ✒️ テキスト中の *〜* を薄い色（HTML）に変換する関数
-# ==========================================
 def format_narration_text(text):
-    # *〜* で囲まれた部分をHTMLの <span class="narration"> に変換
     formatted = re.sub(r'\*(.*?)\*', r'<span class="narration">*\1*</span>', text)
     return formatted
 
@@ -148,10 +144,8 @@ def summarize_memory_if_needed(client):
                 
                 sum_prompt = f"""
 以下のロールプレイのこれまでの会話履歴と現在のあらすじから、今後のロールプレイで絶対に忘れてはならない重要な出来事・感情の変化・約束事を含めた「最新のあらすじ（200文字程度）」を作成してください。
-
 【現在のあらすじ】
 {story_summary}
-
 【これまでの会話】
 {chat_text}
 """
@@ -160,7 +154,6 @@ def summarize_memory_if_needed(client):
                     contents=sum_prompt
                 )
                 new_summary = response.text.strip()
-                
                 st.session_state.characters[selected_name]["summary"] = new_summary
                 st.session_state.messages = st.session_state.messages[-2:]
                 st.toast("🧠 記憶を要約してあらすじを更新しました！", icon="✨")
@@ -168,7 +161,7 @@ def summarize_memory_if_needed(client):
                 print(f"要約エラー: {e}")
 
 # ==========================================
-# 🖼️ 画像生成処理
+# 🖼️ 高速・エラーなし背景画像生成（無料API）
 # ==========================================
 def generate_smartphone_image(context_prompt):
     if not google_api_key:
@@ -178,10 +171,8 @@ def generate_smartphone_image(context_prompt):
     with st.spinner("🎨 スマホサイズの背景画像を生成中..."):
         try:
             client = get_client()
-
             prompt_request = f"""
-            以下の設定と文脈から、縦長（9:16）のスマートフォン壁紙風・高品質アニメイラストの英語プロンプトを1つ作成してください。
-            文字出力はプロンプトのみ。
+            以下の設定と文脈から、スマートフォン壁紙風の美しいアニメ背景イラストの英語プロンプトを1つだけ作成してください（余計な文字は出力せずプロンプトの英語のみ）。
             キャラ設定: {char_setting}
             あらすじ: {story_summary}
             直近の会話: {context_prompt}
@@ -192,22 +183,20 @@ def generate_smartphone_image(context_prompt):
             )
             image_prompt = p_res.text.strip()
 
-            result = client.models.generate_images(
-                model='imagen-3.0-generate-002',
-                prompt=image_prompt,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    aspect_ratio="9:16",
-                    output_mime_type="image/jpeg",
-                )
-            )
+            # 無料の高速画像生成URLを作成
+            encoded_prompt = urllib.parse.quote(image_prompt + ", high quality anime background, masterpiece")
+            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=540&height=960&nologo=true&seed=42"
 
-            for generated_image in result.generated_images:
-                img_bytes = generated_image.image.image_bytes
+            # 画像データをダウンロード
+            res = requests.get(img_url)
+            if res.status_code == 200:
+                img_bytes = res.content
                 image_pil = PIL.Image.open(io.BytesIO(img_bytes))
                 st.session_state.messages.append({"role": "assistant", "content": image_pil, "type": "image"})
                 st.session_state.bg_image_bytes = img_bytes
                 st.rerun()
+            else:
+                st.error("画像の取得に失敗しました。")
 
         except Exception as e:
             st.error(f"画像生成エラー: {e}")
@@ -220,9 +209,7 @@ for msg in st.session_state.messages:
         if msg.get("type") == "image":
             st.image(msg["content"], caption="📱 生成画像", use_container_width=True)
         else:
-            # *〜* が含まれている場合はHTMLとしてきれいに装飾して表示
-            html_content = format_narration_text(msg["content"])
-            st.markdown(html_content, unsafe_allow_html=True)
+            st.markdown(format_narration_text(msg["content"]), unsafe_allow_html=True)
 
 if gen_img_btn:
     last_reply = next((m["content"] for m in reversed(st.session_state.messages) if m["role"] == "assistant" and m.get("type") != "image"), "物語のシーン")
@@ -232,12 +219,10 @@ if user_input := st.chat_input("メッセージを入力... (行動は *歯磨�
     if not google_api_key:
         st.error("左のサイドバーにGoogle API Keyを入力してください！")
     else:
-        # ユーザーの入力もナレーション装飾してチャットに即時反映
         st.chat_message("user").markdown(format_narration_text(user_input), unsafe_allow_html=True)
         st.session_state.messages.append({"role": "user", "content": user_input})
 
         client = get_client()
-
         summarize_memory_if_needed(client)
 
         system_instruction = f"""
@@ -260,15 +245,20 @@ if user_input := st.chat_input("メッセージを入力... (行動は *歯磨�
 
         with st.chat_message("assistant"):
             try:
-                response = client.models.generate_content(
+                # ストリーミング（Geminiのように波のように文字が流れてくる演出）
+                response = client.models.generate_content_stream(
                     model='gemini-3.8-flash',
                     contents=contents,
                     config={'system_instruction': system_instruction}
                 )
-                reply = response.text
                 
-                # AIからの返答をナレーション付きの装飾HTMLで表示
-                st.markdown(format_narration_text(reply), unsafe_allow_html=True)
+                def stream_data():
+                    for chunk in response:
+                        if chunk.text:
+                            yield chunk.text
+
+                # 波のように文字をリアルタイム出力しつつ、ナレーション部分を装飾
+                reply = st.write_stream(stream_data())
                 
                 st.session_state.messages.append({"role": "assistant", "content": reply})
 
