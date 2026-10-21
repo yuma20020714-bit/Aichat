@@ -1,23 +1,18 @@
 import streamlit as st
 from google import genai
-import PIL.Image
-import io
-import base64
 import re
 import urllib.parse
-import requests
 
 # ==========================================
 # ⚙️ 画面・CSS（LINE風チャット＆デザイン調整）
 # ==========================================
 st.set_page_config(page_title="完全無料AIシミュレーター", page_icon="🎭", layout="wide")
 
-def set_bg_image(image_bytes):
-    encoded = base64.b64encode(image_bytes).decode()
+def set_bg_image(image_url):
     css = f"""
     <style>
     .stApp {{
-        background-image: linear-gradient(rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0.65)), url("data:image/jpeg;base64,{encoded}");
+        background-image: linear-gradient(rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0.65)), url("{image_url}");
         background-size: cover;
         background-position: center;
         background-attachment: fixed;
@@ -65,8 +60,8 @@ api_key_from_secret = st.secrets.get("GOOGLE_API_KEY", "")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "bg_image_bytes" not in st.session_state:
-    st.session_state.bg_image_bytes = None
+if "bg_image_url" not in st.session_state:
+    st.session_state.bg_image_url = None
 
 DEFAULT_CHARACTERS = {
     "ツンデレ幼なじみ": {
@@ -84,8 +79,8 @@ DEFAULT_CHARACTERS = {
 if "characters" not in st.session_state:
     st.session_state.characters = DEFAULT_CHARACTERS
 
-if st.session_state.bg_image_bytes:
-    set_bg_image(st.session_state.bg_image_bytes)
+if st.session_state.bg_image_url:
+    set_bg_image(st.session_state.bg_image_url)
 
 # --- サイドバー（設定エリア） ---
 with st.sidebar:
@@ -143,7 +138,7 @@ with st.sidebar:
     st.markdown("---")
     if st.button("🗑️ 最初からやり直す"):
         st.session_state.messages = []
-        st.session_state.bg_image_bytes = None
+        st.session_state.bg_image_url = None
         st.rerun()
 
 if len(st.session_state.messages) == 0:
@@ -171,7 +166,7 @@ def summarize_memory_if_needed(client):
 【これまでの会話】
 {chat_text}
 """
-                response = client.models.generate_content(model='geminit-3.8-flash' if False else 'gemini-3.8-flash', contents=sum_prompt)
+                response = client.models.generate_content(model='gemini-3.8-flash', contents=sum_prompt)
                 st.session_state.characters[selected_name]["summary"] = response.text.strip()
                 st.session_state.messages = st.session_state.messages[-2:]
                 st.toast("🧠 あらすじを自動更新しました！", icon="✨")
@@ -198,17 +193,12 @@ def generate_smartphone_image(context_prompt):
             )
             image_prompt = p_res.text.strip()
             
-            # 完全安全なエンコード処理
             safe_prompt = urllib.parse.quote(image_prompt + ", high quality anime background, masterpiece")
             img_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=540&height=960&nologo=true&seed=42"
 
-            res = requests.get(img_url)
-            if res.status_code == 200:
-                img_bytes = res.content
-                image_pil = PIL.Image.open(io.BytesIO(img_bytes))
-                st.session_state.messages.append({"role": "assistant", "content": image_pil, "type": "image"})
-                st.session_state.bg_image_bytes = img_bytes
-                st.rerun()
+            st.session_state.messages.append({"role": "assistant", "content": img_url, "type": "image"})
+            st.session_state.bg_image_url = img_url
+            st.rerun()
         except Exception as e:
             st.error(f"画像生成エラー: {e}")
 
