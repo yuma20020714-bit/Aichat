@@ -12,6 +12,7 @@ DEFAULT_MODEL = "gemini-3.8-flash"
 DEFAULT_IMAGE_MODEL = "imagen-3.0-generate-002"  # ※無料キーだと使えないことが多い（有料枠向け）
 KEEP_RECENT = 20      # 要約せずそのまま送る直近のメッセージ数（20 = 約10往復）
 SUMMARIZE_CHUNK = 10  # 一度に要約へ回すメッセージ数
+IMAGE_CONTEXT_MSGS = 10  # 画像の情景づくりに使う直近のメッセージ数（ユーザー発言も含む）
 
 st.set_page_config(page_title="完全無料AIシミュレーター", page_icon="🎭", layout="wide")
 
@@ -101,6 +102,12 @@ with st.sidebar:
     MODEL = st.text_input("💬 チャット用モデル名", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     IMAGE_MODEL = st.text_input("🎨 画像生成モデル名", DEFAULT_IMAGE_MODEL).strip() or DEFAULT_IMAGE_MODEL
     st.caption("「モデルが使えない」系のエラーが出たら、ここを新しい名前に変えればOK。")
+    THINKING_LEVEL = st.selectbox(
+        "⚡ 思考の深さ（低いほど速い）",
+        ["low", "medium", "high", "指定しない"],
+        index=0,
+        help="返信が遅いときは low がおすすめ。モデルによっては対応していないので、エラーが出たら「指定しない」に。",
+    )
 
     st.markdown("---")
     st.subheader("👤 キャラクター設定")
@@ -169,6 +176,20 @@ def get_client():
     return genai.Client(api_key=google_api_key)
 
 
+def make_config(**kwargs):
+    """思考の深さの設定を付けた GenerateContentConfig を作る"""
+    if THINKING_LEVEL != "指定しない":
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=THINKING_LEVEL)
+    return types.GenerateContentConfig(**kwargs)
+
+
+def stream_text(stream):
+    """ストリームから文字だけを取り出して順に返す（返信を少しずつ表示するため）"""
+    for chunk in stream:
+        if chunk.text:
+            yield chunk.text
+
+
 # ==========================================
 # 🧠 自動要約＆事実メモの更新
 # ==========================================
@@ -207,7 +228,7 @@ def maybe_update_memory(client):
         res = client.models.generate_content(
             model=MODEL,
             contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
+            config=make_config(response_mime_type="application/json"),
         )
         data = json.loads(res.text)
         st.session_state.auto_summary = str(data.get("summary", "")).strip()
@@ -234,16 +255,42 @@ def generate_smartphone_image(context_prompt):
     with st.spinner("🎨 スマホサイズの背景画像を生成中..."):
         try:
             client = get_client()
+            # 直近の会話（ユーザーの発言も含めて）を情景の材料にする
+            recent_log = "\n".join(
+                f"{'ユーザー' if m['role'] == 'user' else char_name}: {m['content']}"
+                for m in text_msgs()[-IMAGE_CONTEXT_MSGS:]
+            ) or context_prompt
             prompt_request = f"""
             以下の設定と文脈から、縦長（9:16）のスマートフォン壁紙風・高品質アニメイラストの英語プロンプトを1つ作成してください。
+            直近の会話の流れをふまえ、特に【最後のやり取り】の場面（場所・時間帯・光・キャラの表情や仕草・位置関係）を描いてください。
             文字出力はプロンプトのみ。
             キャラ設定: {char_setting}
             あらすじ: {story_summary}
             {st.session_state.auto_summary}
-            直近の会話: {context_prompt}
+            直近の会話（古い順）:
+            {recent_log}
             """
-            p_res = client.models.generate_content(model=MODEL, contents=prompt_request)
-            image_prompt = p_res.text.strip()
+            # 画像用プロンプトを作る（返答が空だった場合は1回だけやり直す）
+            image_prompt = None
+            p_res = None
+            for _ in range(2):
+                p_res = client.models.generate_content(
+                    model=MODEL, contents=prompt_request, config=make_config()
+                )
+                if p_res.text and p_res.text.strip():
+                    image_prompt = p_res.text.strip()
+                    break
+            if not image_prompt:
+                reason = ""
+                try:
+                    reason = f"（終了理由: {p_res.candidates[0].finish_reason}）"
+                except Exception:
+                    pass
+                st.error(
+                    f"画像用のプロンプトを作れませんでした。モデルの返答が空でした{reason}。"
+                    "もう一度ボタンを押すか、「思考の深さ」を変えて試してください。"
+                )
+                return False
 
             result = client.models.generate_images(
                 model=IMAGE_MODEL,
@@ -266,10 +313,11 @@ def generate_smartphone_image(context_prompt):
             return True
 
         except Exception as e:
-            st.error(
-                f"画像生成エラー: {e}\n\n"
-                "※ Imagenは無料のAPIキーだと使えないことがあります（課金設定が必要なモデルです）。"
-            )
+            msg = f"画像生成エラー: {e}"
+            # 画像モデル側の問題っぽいときだけ、課金の注意書きを付ける
+            if any(k in str(e).lower() for k in ["imagen", "billed", "billing", "permission", "not found", "404", "403"]):
+                msg += "\n\n※ Imagenは無料のAPIキーだと使えないことがあります（課金設定が必要なモデルです）。"
+            st.error(msg)
             return False
 
 
@@ -336,15 +384,15 @@ if user_input := st.chat_input("メッセージを入力... (画像変更は「(
         reply = None
         with st.chat_message("assistant"):
             try:
-                response = client.models.generate_content(
+                # ストリーミング：生成された分から順に表示する（待ち時間の体感が大きく減る）
+                stream = client.models.generate_content_stream(
                     model=MODEL,
                     contents=contents,
-                    config=types.GenerateContentConfig(system_instruction=system_instruction),
+                    config=make_config(system_instruction=system_instruction),
                 )
-                reply = response.text
+                reply = st.write_stream(stream_text(stream))
                 if not reply:
                     raise ValueError("返信が空でした（安全フィルタに引っかかった可能性があります）")
-                st.write(reply)
                 st.session_state.messages.append({"role": "assistant", "content": reply})
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
