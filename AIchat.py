@@ -22,36 +22,32 @@ def set_bg_image(image_bytes):
         background-position: center;
         background-attachment: fixed;
     }}
-    /* チャット全体の背景を透明化し、LINE風の配置にする */
-    div[data-testid="stChatMessage"] {{
-        background-color: transparent !important;
-        padding: 5px 10px;
-        margin-bottom: 5px;
+    /* LINE風メッセージコンテナ */
+    .chat-row-user {{
+        display: flex;
+        justify-content: flex-end;
+        margin: 8px 0;
     }}
-    /* ユーザー（自分）のメッセージを右側に寄せる */
-    div.st-key-user_msg {{
-        flex-direction: row-reverse !important;
-        text-align: right;
+    .chat-row-ai {{
+        display: flex;
+        justify-content: flex-start;
+        margin: 8px 0;
     }}
-    div.st-key-user_msg div[data-testid="stChatMessageContent"] {{
-        background-color: rgba(0, 120, 255, 0.65) !important;
+    .chat-bubble-user {{
+        background-color: rgba(0, 120, 255, 0.8) !important;
         color: white;
+        padding: 10px 14px;
         border-radius: 15px 15px 0 15px;
-        padding: 10px 14px;
-        display: inline-block;
-        text-align: left;
+        max-width: 70%;
+        word-break: break-all;
     }}
-    /* 相手（AI）のメッセージを左側に配置 */
-    div.st-key-ai_msg div[data-testid="stChatMessageContent"] {{
-        background-color: rgba(30, 30, 30, 0.75) !important;
+    .chat-bubble-ai {{
+        background-color: rgba(30, 30, 30, 0.85) !important;
         color: white;
-        border-radius: 15px 15px 15px 0;
         padding: 10px 14px;
-        display: inline-block;
-    }}
-    /* アイコンを非表示にする */
-    div[data-testid="stChatMessageAvatar"] {{
-        display: none !important;
+        border-radius: 15px 15px 15px 0;
+        max-width: 70%;
+        word-break: break-all;
     }}
     /* ナレーション（*〜*）のスタイル */
     .narration {{
@@ -98,7 +94,6 @@ if st.session_state.bg_image_bytes:
 # --- サイドバー（設定エリア） ---
 with st.sidebar:
     st.header("⚙️ 設定")
-    # Secretが未設定の場合のみ入力欄を表示
     if not api_key_from_secret:
         google_api_key = st.text_input("Google API Keyを入力", type="password")
     else:
@@ -155,7 +150,7 @@ with st.sidebar:
         st.session_state.bg_image_bytes = None
         st.rerun()
 
-# タイトルは「会話がまだ始まっていない時」だけ表示し、会話が始まればスッキリ消えるようにする
+# タイトルは会話が始まっていない時だけ表示
 if len(st.session_state.messages) == 0:
     st.title(f"🎭 {char_name} とのロールプレイ")
 
@@ -221,16 +216,16 @@ def generate_smartphone_image(context_prompt):
             st.error(f"画像生成エラー: {e}")
 
 # ==========================================
-# 💬 LINE風チャット表示
+# 💬 LINE風チャット表示（カスタムHTML）
 # ==========================================
 for msg in st.session_state.messages:
-    # 自分のメッセージは右側（user_msg）、相手は左側（ai_msg）に分ける
-    msg_key = "user_msg" if msg["role"] == "user" else "ai_msg"
-    with st.chat_message(msg["role"], key=msg_key):
+    if msg["role"] == "user":
+        st.markdown(f'<div class="chat-row-user"><div class="chat-bubble-user">{format_narration_text(str(msg["content"]))}</div></div>', unsafe_allow_html=True)
+    else:
         if msg.get("type") == "image":
             st.image(msg["content"], caption="📱 生成画像", use_container_width=True)
         else:
-            st.markdown(format_narration_text(msg["content"]), unsafe_allow_html=True)
+            st.markdown(f'<div class="chat-row-ai"><div class="chat-bubble-ai">{format_narration_text(str(msg["content"]))}</div></div>', unsafe_allow_html=True)
 
 if gen_img_btn:
     last_reply = next((m["content"] for m in reversed(st.session_state.messages) if m["role"] == "assistant" and m.get("type") != "image"), "物語のシーン")
@@ -240,9 +235,8 @@ if user_input := st.chat_input("メッセージを入力... (行動は *歯磨�
     if not google_api_key:
         st.error("APIキーが設定されていません！")
     else:
-        # ユーザー（自分）のメッセージを右側に表示
-        with st.chat_message("user", key="user_msg"):
-            st.markdown(format_narration_text(user_input), unsafe_allow_html=True)
+        # ユーザー（自分）のメッセージを即座に右側に表示
+        st.markdown(f'<div class="chat-row-user"><div class="chat-bubble-user">{format_narration_text(user_input)}</div></div>', unsafe_allow_html=True)
         st.session_state.messages.append({"role": "user", "content": user_input})
 
         client = get_client()
@@ -267,24 +261,25 @@ if user_input := st.chat_input("メッセージを入力... (行動は *歯磨�
             contents.append({"role": role, "parts": [{"text": str(m["content"])}]})
 
         # 相手（AI）のメッセージを左側にストリーミング出力
-        with st.chat_message("assistant", key="ai_msg"):
+        with st.container():
+            placeholder = st.empty()
             try:
                 response = client.models.generate_content_stream(
                     model='gemini-3.8-flash',
                     contents=contents,
-                    config={'system_instruction': system_instruction}
+                    config={'system_instruction': service_instruction if 'service_instruction' in locals() else system_instruction}
                 )
                 
-                def stream_data():
-                    for chunk in response:
-                        if chunk.text:
-                            yield chunk.text
-
-                reply = st.write_stream(stream_data())
-                st.session_state.messages.append({"role": "assistant", "content": reply})
+                full_reply = ""
+                for chunk in response:
+                    if chunk.text:
+                        full_reply += chunk.text
+                        placeholder.markdown(f'<div class="chat-row-ai"><div class="chat-bubble-ai">{format_narration_text(full_reply)}</div></div>', unsafe_allow_html=True)
+                
+                st.session_state.messages.append({"role": "assistant", "content": full_reply})
 
                 if "(画像生成)" in user_input:
-                    generate_smartphone_image(reply)
+                    generate_smartphone_image(full_reply)
 
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
